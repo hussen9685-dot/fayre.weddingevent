@@ -131,15 +131,7 @@ html,body{height:100%;overflow:hidden;font-family:'Sarabun',sans-serif;
   white-space:nowrap;pointer-events:none;display:none;font-family:'Sarabun',sans-serif;}
 .ci.selected .ci-pos-label{display:block;}
 
-/* ── EDITING HIGHLIGHT RING ── */
-.ci.editing-target::before{
-  content:'';position:absolute;inset:-6px;
-  border:3px solid var(--gold);border-radius:6px;
-  pointer-events:none;z-index:20;
-  box-shadow:0 0 0 3px rgba(201,160,96,.25);
-  animation:editpulse 1.4s ease-in-out infinite;
-}
-@keyframes editpulse{0%,100%{opacity:1;}50%{opacity:.5;}}
+/* ── EDITING HIGHLIGHT RING ── (removed) */
 
 /* ── STATUS BAR ── */
 .statusbar{position:absolute;top:0;left:0;right:0;height:32px;
@@ -1079,24 +1071,24 @@ function bindItemEvents(el){
 
 function openSheetForEditing(id){
   selectItem(id);
-  switchTab('props');
+  switchTab("props");
   expandSheet();
-  // scroll item into visible area above sheet
-  scrollItemIntoView(id);
+  // รอ sheet expand เสร็จก่อน (~200ms) แล้วค่อย center
+  setTimeout(()=>scrollItemIntoView(id),200);
 }
 function scrollItemIntoView(id){
   const item=items.find(i=>i.id===id);if(!item)return;
-  // compute screen position of item center
-  const screenX=item.x*zoom+panX+wrap.clientWidth/2;
+  // ล็อก zoom ที่ 120%
+  zoom=1.2;
+  const itemCX=item.x+item.w/2;
+  const itemCY=item.y+item.h/2;
   const sheetH=sheet.offsetHeight;
-  const availH=wrap.clientHeight-sheetH-32; // 32=statusbar
-  const screenY=item.y*zoom+panY+wrap.clientHeight/2;
-  // if item is behind sheet, nudge pan up
-  if(screenY+item.h*zoom/2>availH){
-    const targetY=availH/2;
-    panY=targetY-item.y*zoom;
-    applyViewTransform();renderGuides();
-  }
+  const topbarH=48;
+  const visibleH=wrap.clientHeight-sheetH-topbarH;
+  panX=-(itemCX*zoom);
+  panY=(topbarH+visibleH/2)-wrap.clientHeight/2-(itemCY*zoom);
+  applyViewTransform(true);
+  renderGuides();
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1213,7 +1205,11 @@ wrap.addEventListener('wheel',e=>{
 function zoomBy(f){setZoomAbs(zoom*f);}
 function setZoomAbs(v){const nz=Math.min(4,Math.max(.15,v));const r=nz/zoom;panX*=r;panY*=r;zoom=nz;applyViewTransform();renderGuides();}
 function resetView(){zoom=1;panX=0;panY=0;applyViewTransform();renderGuides();}
-function applyViewTransform(){
+function applyViewTransform(animate){
+  if(animate){
+    canvasEl.style.transition="transform 0.35s cubic-bezier(0.25,0.46,0.45,0.94)";
+    setTimeout(()=>{canvasEl.style.transition="";},380);
+  }
   canvasEl.style.transform=`translate(${panX}px,${panY}px) scale(${zoom})`;
   document.getElementById('zoomLabel').textContent=Math.round(zoom*100)+'%';
 }
@@ -1228,10 +1224,13 @@ function selectItem(id){
   else setStatusMsg('แตะ object เพื่อเลือก');
 }
 function setStatusMsg(msg){document.getElementById('statusMsg').textContent=msg;}
-canvasEl.addEventListener('click',e=>{if(e.target===canvasEl)selectItem(null);});
-wrap.addEventListener('click',e=>{
+canvasEl.addEventListener("click",e=>{if(e.target===canvasEl)selectItem(null);});
+wrap.addEventListener("click",e=>{
   if(backgroundDragMoved){backgroundDragMoved=false;return;}
-  if(e.target===wrap||e.target===canvasEl)selectItem(null);
+  if(e.target===wrap||e.target===canvasEl){
+    selectItem(null);
+    if(sheetExpanded)collapseSheet();
+  }
 });
 
 // ═══════════════════════════════════════════════════════
