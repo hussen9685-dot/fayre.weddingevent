@@ -1,0 +1,1655 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Backdrop Planner v3</title>
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyAVgvf8A3GeSC1QJivHPWrUwIYUyts3CPA",
+  authDomain: "backdrop-planer.firebaseapp.com",
+  projectId: "backdrop-planer",
+  storageBucket: "backdrop-planer.firebasestorage.app",
+  messagingSenderId: "936671617855",
+  appId: "1:936671617855:web:182dbaa476c62f8eb4a98a"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// ── Firestore helpers ──────────────────────────────────
+// Collection layout:
+//   shared/objects  → global object library (images)
+//   shared/projects → all projects map
+//   shared/meta     → currentProjectId
+
+async function fsGet(docId){
+  try{
+    const snap = await db.collection('shared').doc(docId).get();
+    return snap.exists ? snap.data() : null;
+  }catch(e){console.warn('fsGet',e);return null;}
+}
+async function fsSet(docId, data){
+  try{
+    await db.collection('shared').doc(docId).set(data);
+  }catch(e){console.warn('fsSet',e);}
+}
+
+// ── Override storage functions (defined later in main script) ──
+// These are assigned after DOM loads; we attach them as async wrappers.
+window._fbReady = true;
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --bg:#f5f2ee;--surface:#fff;--border:#e0d8cf;
+  --accent:#6b5744;--accent2:#a08060;--gold:#c9a060;
+  --text:#2a1f18;--dim:#8a7a6a;--panel:#faf8f5;
+  --sel:#c8a882;--danger:#c0392b;--lock:#c9a060;
+  --guide:#3b82f6;--snap:#10b981;
+  --sheet-h:160px;/* collapsed height */
+}
+html,body{height:100%;overflow:hidden;font-family:'Sarabun',sans-serif;
+  background:var(--bg);color:var(--text);font-size:13px;
+  -webkit-tap-highlight-color:transparent;}
+.app{display:flex;flex-direction:column;height:100vh;}
+
+/* ── TOPBAR ── */
+.topbar{
+  display:flex;align-items:center;gap:6px;
+  padding:0 8px;height:48px;flex-shrink:0;
+  background:var(--surface);border-bottom:1px solid var(--border);
+  box-shadow:0 1px 8px rgba(0,0,0,.06);z-index:40;
+  overflow-x:auto;-webkit-overflow-scrolling:touch;
+}
+.topbar::-webkit-scrollbar{display:none;}
+.logo{font-size:14px;font-weight:700;color:var(--accent);letter-spacing:.02em;white-space:nowrap;margin-right:4px;}
+.logo span{color:var(--gold);}
+.sp{flex:1;}
+.tbtn{
+  border:1px solid var(--border);background:var(--panel);
+  color:var(--dim);border-radius:7px;padding:5px 9px;
+  font-size:11px;font-weight:600;cursor:pointer;
+  font-family:'Sarabun',sans-serif;white-space:nowrap;
+  transition:all .13s;display:flex;align-items:center;gap:4px;flex-shrink:0;
+}
+.tbtn:active{background:var(--border);}
+.tbtn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+.tbtn-primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700;}
+.tbtn-danger{background:var(--danger);border-color:var(--danger);color:#fff;}
+
+/* ── MAIN ── */
+.main{flex:1;display:flex;overflow:hidden;position:relative;}
+.canvas-wrap{flex:1;position:relative;overflow:hidden;background:#ebe7df;}
+#canvas{position:absolute;left:50%;top:50%;transform-origin:center center;}
+
+/* guide lines */
+.guide-line{position:absolute;pointer-events:none;z-index:5;}
+.guide-line.h{left:0;right:0;height:1px;}
+.guide-line.v{top:0;bottom:0;width:1px;}
+.guide-line.center{background:rgba(59,130,246,.5);border-top:1px dashed rgba(59,130,246,.6);}
+.guide-line.third{background:rgba(59,130,246,.25);border-top:1px dashed rgba(59,130,246,.35);}
+.guide-line.vline{border-left:1px dashed rgba(59,130,246,.5);}
+
+/* snap tip */
+.snap-tip{position:fixed;pointer-events:none;z-index:9999;
+  background:rgba(16,185,129,.9);color:#fff;font-size:10px;
+  padding:3px 8px;border-radius:5px;display:none;font-family:'Sarabun',sans-serif;}
+
+/* canvas item */
+.ci{position:absolute;cursor:move;user-select:none;-webkit-user-drag:none;touch-action:none;}
+.ci img{display:block;width:100%;height:100%;object-fit:contain;pointer-events:none;-webkit-user-drag:none;}
+.ci.selected::after{content:'';position:absolute;inset:-3px;
+  border:2px dashed var(--sel);border-radius:4px;pointer-events:none;}
+.ci.locked{cursor:default;}
+.ci.locked.selected::after{border-style:solid;border-color:var(--lock);}
+.ci-handle{position:absolute;bottom:-10px;right:-10px;width:26px;height:26px;
+  background:var(--accent);border-radius:50%;cursor:nwse-resize;
+  display:none;align-items:center;justify-content:center;
+  color:#fff;font-size:12px;touch-action:none;z-index:10;
+  box-shadow:0 1px 5px rgba(0,0,0,.25);}
+.ci.selected .ci-handle{display:flex;}
+.ci-handle-tl{position:absolute;top:-10px;left:-10px;width:24px;height:24px;
+  background:var(--accent2);border-radius:50%;cursor:nwse-resize;
+  display:none;align-items:center;justify-content:center;
+  color:#fff;font-size:11px;touch-action:none;z-index:10;
+  box-shadow:0 1px 5px rgba(0,0,0,.25);}
+.ci.selected .ci-handle-tl{display:flex;}
+.ci-lock-btn{position:absolute;top:-10px;right:-10px;width:24px;height:24px;
+  background:var(--accent2);border-radius:50%;cursor:pointer;
+  display:none;align-items:center;justify-content:center;
+  color:#fff;font-size:11px;touch-action:none;z-index:11;
+  box-shadow:0 1px 5px rgba(0,0,0,.25);}
+.ci.selected .ci-lock-btn{display:flex;}
+.ci.locked .ci-lock-btn{display:flex;background:var(--lock);}
+.ci.locked .ci-handle,.ci.locked .ci-handle-tl{display:none!important;}
+.ci-pos-label{position:absolute;top:-22px;left:0;background:rgba(107,87,68,.85);
+  color:#fff;font-size:9px;padding:2px 6px;border-radius:4px;
+  white-space:nowrap;pointer-events:none;display:none;font-family:'Sarabun',sans-serif;}
+.ci.selected .ci-pos-label{display:block;}
+
+/* ── EDITING HIGHLIGHT RING ── */
+.ci.editing-target::before{
+  content:'';position:absolute;inset:-6px;
+  border:3px solid var(--gold);border-radius:6px;
+  pointer-events:none;z-index:20;
+  box-shadow:0 0 0 3px rgba(201,160,96,.25);
+  animation:editpulse 1.4s ease-in-out infinite;
+}
+@keyframes editpulse{0%,100%{opacity:1;}50%{opacity:.5;}}
+
+/* ── STATUS BAR ── */
+.statusbar{position:absolute;top:0;left:0;right:0;height:32px;
+  background:rgba(255,255,255,.88);border-bottom:1px solid var(--border);
+  backdrop-filter:blur(6px);display:flex;align-items:center;
+  padding:0 12px;gap:10px;font-size:10px;color:var(--dim);z-index:30;}
+.statusbar .sp{flex:1;}
+.statusbar kbd{background:var(--panel);border:1px solid var(--border);
+  border-radius:3px;padding:1px 5px;font-size:9px;font-family:inherit;}
+
+/* ── FABs ── */
+.fab-group{position:absolute;right:10px;bottom:calc(var(--sheet-h) + 14px);
+  display:flex;flex-direction:column;gap:8px;z-index:35;}
+.fab{width:44px;height:44px;border-radius:50%;border:1px solid var(--border);
+  background:var(--surface);color:var(--text);font-size:17px;
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.12);transition:all .13s;}
+.fab:active{background:var(--border);transform:scale(.93);}
+.fab.red{background:var(--danger);color:#fff;border-color:var(--danger);}
+.fab.undo-btn{font-size:14px;}
+.fab.undo-btn:disabled{opacity:.35;}
+
+/* ── BOTTOM SHEET ── */
+.bottom-sheet{
+  position:absolute;bottom:0;left:0;right:0;
+  background:var(--surface);
+  border-radius:16px 16px 0 0;
+  box-shadow:0 -4px 24px rgba(0,0,0,.12);
+  z-index:50;display:flex;flex-direction:column;
+  height:var(--sheet-h);
+  max-height:80vh;
+  transition:height .28s cubic-bezier(.4,0,.2,1);
+}
+.bottom-sheet.expanded{height:60vh;}
+.bottom-sheet.full{height:80vh;}
+
+.sheet-drag{
+  height:44px;display:flex;align-items:center;justify-content:space-between;
+  cursor:pointer;flex-shrink:0;position:relative;padding:0 14px;
+  touch-action:none;
+}
+.sheet-pip{width:36px;height:4px;background:var(--border);border-radius:2px;
+  position:absolute;top:7px;left:50%;transform:translateX(-50%);}
+.sheet-title{font-size:11px;font-weight:700;color:var(--dim);
+  letter-spacing:.08em;text-transform:uppercase;}
+.sheet-chevron{font-size:10px;color:var(--accent2);}
+
+.sheet-tabs{display:flex;border-bottom:1px solid var(--border);
+  flex-shrink:0;overflow-x:auto;-webkit-overflow-scrolling:touch;height:42px;}
+.sheet-tabs::-webkit-scrollbar{display:none;}
+.stab{flex-shrink:0;padding:0 13px;font-size:11px;font-weight:700;color:var(--dim);
+  border-bottom:2.5px solid transparent;cursor:pointer;white-space:nowrap;
+  border:none;background:none;font-family:'Sarabun',sans-serif;
+  transition:all .13s;display:flex;align-items:center;justify-content:center;height:100%;}
+.stab.active{color:var(--accent);border-bottom-color:var(--accent);}
+
+.sheet-body{flex:1;overflow-y:auto;padding:12px 14px 24px;
+  -webkit-overflow-scrolling:touch;}
+.sheet-body::-webkit-scrollbar{width:3px;}
+.sheet-body::-webkit-scrollbar-thumb{background:var(--border);}
+
+/* ── LIBRARY ── */
+.cat-header{display:flex;align-items:center;justify-content:space-between;
+  margin:10px 0 6px;cursor:pointer;}
+.cat-label{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--dim);display:flex;align-items:center;gap:6px;}
+.cat-chev{font-size:9px;color:var(--accent2);transition:transform .2s;}
+.cat-chev.open{transform:rotate(180deg);}
+.cat-section{overflow:hidden;}
+.lib-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:6px;}
+.lib-card{background:var(--panel);border:1.5px solid var(--border);border-radius:10px;
+  padding:8px 4px 6px;display:flex;flex-direction:column;align-items:center;
+  gap:5px;cursor:pointer;transition:all .13s;position:relative;
+  -webkit-tap-highlight-color:transparent;}
+.lib-card:active{border-color:var(--accent);background:#f5ede3;transform:scale(.96);}
+.lib-card img{width:60px;height:52px;object-fit:contain;display:block;border-radius:4px;}
+.lib-card .lc-name{font-size:9px;color:var(--dim);text-align:center;line-height:1.3;word-break:break-all;}
+.lib-card .lc-size{font-size:8px;color:var(--accent2);text-align:center;margin-top:1px;cursor:pointer;font-weight:600;}
+.lib-card .lc-del{position:absolute;top:4px;right:4px;width:18px;height:18px;
+  border-radius:50%;background:rgba(0,0,0,.15);color:#fff;font-size:11px;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;line-height:1;}
+.lib-card .lc-del:active{background:var(--danger);}
+.upload-tile{background:transparent;border:2px dashed var(--accent2);border-radius:10px;
+  padding:12px 4px;display:flex;flex-direction:column;align-items:center;
+  gap:5px;cursor:pointer;color:var(--accent2);}
+.upload-tile:active{background:#f5ede3;}
+.upload-tile span{font-size:20px;}
+.upload-tile small{font-size:9px;text-align:center;line-height:1.4;}
+
+/* ── PROPS ── */
+.prop-box{background:var(--panel);border-radius:10px;padding:12px;margin-bottom:10px;}
+.prop-title{font-size:12px;font-weight:700;color:var(--accent);margin-bottom:10px;}
+.prop-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--dim);margin-bottom:5px;margin-top:8px;}
+.xy-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;}
+.xy-field{display:flex;flex-direction:column;gap:4px;}
+.xy-field label{font-size:10px;color:var(--dim);font-weight:700;}
+.xy-row{display:flex;align-items:center;gap:4px;}
+.xy-row input{flex:1;border:1px solid var(--border);border-radius:6px;
+  padding:7px 8px;font-size:13px;font-weight:700;font-family:'Sarabun',sans-serif;
+  text-align:center;color:var(--text);background:var(--surface);width:100%;}
+.xy-row input:focus{outline:none;border-color:var(--accent);}
+.xy-step{width:28px;height:28px;border:1px solid var(--border);border-radius:6px;
+  background:var(--panel);color:var(--dim);font-size:15px;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;}
+.xy-step:active{background:var(--border);}
+.size-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;}
+.size-field label{font-size:10px;color:var(--dim);font-weight:700;display:block;margin-bottom:4px;}
+.size-field input{width:100%;border:1px solid var(--border);border-radius:6px;
+  padding:7px 8px;font-size:13px;font-weight:700;font-family:'Sarabun',sans-serif;
+  text-align:center;color:var(--text);background:var(--surface);}
+.size-field input:focus{outline:none;border-color:var(--accent);}
+.action-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;}
+.abtn{padding:9px 8px;border:1.5px solid var(--border);border-radius:8px;
+  background:none;color:var(--text);font-size:11px;font-weight:600;
+  cursor:pointer;font-family:'Sarabun',sans-serif;
+  display:flex;align-items:center;justify-content:center;gap:5px;transition:all .13s;}
+.abtn:active{background:var(--border);}
+.abtn.danger{color:var(--danger);border-color:#f5c6c6;}
+.abtn.danger:active{background:#fdeaea;}
+.sg-label{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--dim);margin-bottom:8px;}
+.sl-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+.sl-row label{font-size:11px;color:var(--dim);min-width:42px;}
+.sl-row input[type=range]{flex:1;-webkit-appearance:none;height:4px;
+  background:var(--border);border-radius:2px;outline:none;cursor:pointer;}
+.sl-row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;
+  width:18px;height:18px;border-radius:50%;background:var(--accent);cursor:pointer;}
+.sl-row .val{font-size:11px;font-weight:700;color:var(--accent);min-width:36px;text-align:right;}
+.guide-opts{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;}
+.guide-opt{padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;
+  background:var(--panel);cursor:pointer;font-size:11px;font-weight:600;
+  color:var(--dim);display:flex;align-items:center;gap:6px;transition:all .13s;}
+.guide-opt.on{border-color:var(--guide);background:#eff6ff;color:var(--guide);}
+.guide-opt:active{transform:scale(.96);}
+.zoom-bar{display:flex;align-items:center;gap:8px;}
+.zoom-bar button{width:32px;height:32px;border:1px solid var(--border);border-radius:8px;
+  background:var(--panel);color:var(--text);font-size:18px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;}
+.zoom-bar button:active{background:var(--border);}
+.zoom-bar .zoom-val{font-size:12px;font-weight:700;color:var(--accent);min-width:44px;text-align:center;}
+.no-sel{padding:20px 10px;text-align:center;color:var(--dim);font-size:12px;line-height:1.7;}
+.no-sel .icon{font-size:28px;margin-bottom:6px;}
+.setting-group{margin-bottom:12px;}
+
+/* ── PROJECT LIST / MODAL ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(20,15,10,.52);
+  z-index:200;display:none;align-items:center;justify-content:center;padding:16px;}
+.modal-overlay.open{display:flex;}
+.modal-box{background:var(--surface);border-radius:14px;max-width:380px;width:100%;
+  max-height:85vh;display:flex;flex-direction:column;
+  padding:0;box-shadow:0 10px 40px rgba(0,0,0,.3);overflow:hidden;}
+.modal-head{display:flex;align-items:center;justify-content:space-between;
+  padding:16px 16px 12px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.modal-head h3{font-size:14px;font-weight:700;color:var(--accent);}
+.modal-close{width:30px;height:30px;border-radius:50%;border:1px solid var(--border);
+  background:var(--panel);cursor:pointer;display:flex;align-items:center;
+  justify-content:center;font-size:16px;color:var(--dim);}
+.modal-body{flex:1;overflow-y:auto;padding:14px;}
+.modal-foot{padding:12px 14px;border-top:1px solid var(--border);flex-shrink:0;}
+
+/* project list */
+.proj-item{display:flex;align-items:center;gap:10px;padding:10px 12px;
+  border:1.5px solid var(--border);border-radius:10px;margin-bottom:8px;
+  cursor:pointer;transition:all .13s;background:var(--panel);}
+.proj-item:active{background:#f0ebe4;border-color:var(--accent);}
+.proj-item.current{border-color:var(--accent);background:#fdf4ea;}
+.proj-info{flex:1;min-width:0;}
+.proj-name{font-size:12px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.proj-meta{font-size:10px;color:var(--dim);margin-top:2px;}
+.proj-del{width:28px;height:28px;border-radius:50%;border:1px solid #f5c6c6;
+  background:none;cursor:pointer;display:flex;align-items:center;
+  justify-content:center;font-size:13px;color:var(--danger);flex-shrink:0;}
+.proj-del:active{background:#fdeaea;}
+
+/* input in modal */
+.modal-input{width:100%;border:1.5px solid var(--border);border-radius:8px;
+  padding:10px 12px;font-size:13px;font-family:'Sarabun',sans-serif;
+  color:var(--text);background:var(--surface);}
+.modal-input:focus{outline:none;border-color:var(--accent);}
+
+/* ── CATEGORY RENAME MODAL ── */
+.cat-rename-input{width:100%;border:1.5px solid var(--border);border-radius:8px;
+  padding:8px 10px;font-size:13px;font-family:'Sarabun',sans-serif;color:var(--text);}
+.cat-rename-input:focus{outline:none;border-color:var(--accent);}
+
+/* ── DIM MODAL ── */
+.dim-modal-overlay{position:fixed;inset:0;background:rgba(20,15,10,.5);
+  z-index:210;display:none;align-items:center;justify-content:center;padding:16px;}
+.dim-modal{background:var(--surface);border-radius:14px;max-width:340px;width:100%;
+  padding:18px;box-shadow:0 10px 40px rgba(0,0,0,.3);}
+.dim-modal-head{display:flex;gap:10px;align-items:center;margin-bottom:12px;}
+.dim-modal-head img{width:48px;height:42px;object-fit:contain;background:var(--panel);
+  border-radius:8px;border:1px solid var(--border);flex-shrink:0;}
+.dim-modal-title{font-size:13px;font-weight:700;color:var(--accent);}
+.dim-modal-name{font-size:11px;color:var(--dim);margin-top:1px;}
+.dim-modal-hint{font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:12px;}
+.dim-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;}
+.dim-field label{font-size:10px;color:var(--dim);font-weight:700;display:block;margin-bottom:4px;}
+.dim-field input{width:100%;border:1px solid var(--border);border-radius:8px;padding:9px 8px;
+  font-size:14px;font-weight:700;text-align:center;font-family:'Sarabun',sans-serif;
+  color:var(--text);background:var(--panel);}
+.dim-field input:focus{outline:none;border-color:var(--accent);}
+.dim-checkbox{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);
+  margin-bottom:6px;cursor:pointer;}
+.dim-modal-actions{display:grid;grid-template-columns:1fr 1.3fr;gap:8px;margin-top:8px;}
+
+/* ── SHARE MODAL ── */
+.share-url{display:flex;gap:8px;align-items:center;}
+.share-url input{flex:1;border:1.5px solid var(--border);border-radius:8px;
+  padding:9px 10px;font-size:11px;font-family:monospace;color:var(--dim);
+  background:var(--panel);}
+.share-copy-btn{padding:9px 12px;border:1.5px solid var(--accent);border-radius:8px;
+  background:var(--accent);color:#fff;font-size:11px;font-weight:700;
+  cursor:pointer;font-family:'Sarabun',sans-serif;white-space:nowrap;flex-shrink:0;}
+.share-copy-btn:active{background:#5a4535;}
+
+/* ── DESKTOP SIDEBAR ── */
+@media(min-width:700px){
+  .app{flex-direction:row;}
+  .topbar{width:200px;flex-direction:column;height:auto;padding:14px;
+    align-items:flex-start;border-right:1px solid var(--border);
+    border-bottom:none;justify-content:flex-start;gap:8px;overflow:visible;}
+  .sp{display:none;}
+  .topbar .tbtn{width:100%;}
+  .main{flex:1;}
+  .bottom-sheet{position:fixed;right:0;top:0;bottom:0;width:220px;
+    border-radius:0;max-height:100vh;box-shadow:-3px 0 16px rgba(0,0,0,.08);
+    height:100vh!important;}
+  .sheet-drag{display:none;}
+  .fab-group{right:230px;bottom:40px;}
+  .statusbar{right:220px;}
+}
+#ghost{position:fixed;pointer-events:none;z-index:9999;opacity:.8;
+  transform:translate(-50%,-50%);display:none;border-radius:6px;}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- TOPBAR -->
+  <div class="topbar" id="topbar">
+    <div class="logo">🎪 Backdrop<span>Planner</span></div>
+    <button class="tbtn tbtn-primary" onclick="document.getElementById('fileIn').click()">➕ Object</button>
+    <button class="tbtn" onclick="openProjectModal()">📁 โปรเจ็ค</button>
+    <button class="tbtn" onclick="openShareModal()">🔗 แชร์</button>
+    <button class="tbtn" onclick="toggleGuides()" id="btnGuide">📏 Guide</button>
+    <button class="tbtn" onclick="exportPNG()">⬇ PNG</button>
+    <div class="sp"></div>
+  </div>
+
+  <div class="main">
+    <div class="canvas-wrap" id="canvasWrap">
+      <div id="canvas"></div>
+      <div id="guideContainer"></div>
+
+      <!-- STATUS BAR -->
+      <div class="statusbar" id="statusbar">
+        <span id="zoomLabel">100%</span>
+        <span>·</span>
+        <span id="statusMsg">แตะ object เพื่อเลือก</span>
+        <div class="sp"></div>
+        <span id="projNameLabel" style="font-weight:700;color:var(--accent);font-size:10px;"></span>
+      </div>
+    </div>
+
+    <!-- FABs -->
+    <div class="fab-group">
+      <div class="fab" onclick="zoomBy(1.15)">＋</div>
+      <div class="fab" onclick="resetView()" style="font-size:13px">⊙</div>
+      <div class="fab" onclick="zoomBy(0.87)">－</div>
+      <div class="fab undo-btn" onclick="undo()" id="fabUndo" title="ย้อนกลับ">↩</div>
+      <div class="fab red" onclick="deleteSelected()" id="fabDel" style="display:none">🗑</div>
+    </div>
+
+    <!-- BOTTOM SHEET -->
+    <div class="bottom-sheet" id="bottomSheet">
+      <div class="sheet-drag" id="sheetDrag">
+        <div class="sheet-pip"></div>
+        <div class="sheet-title" id="sheetTitle">LIBRARY</div>
+        <span class="sheet-chevron" id="sheetChevron">▲</span>
+      </div>
+      <div class="sheet-tabs">
+        <button class="stab active" onclick="switchTab('library')" id="tab-library">📦 Library</button>
+        <button class="stab" onclick="switchTab('props')" id="tab-props">✎ Object</button>
+        <button class="stab" onclick="switchTab('scene')" id="tab-scene">🎨 ฉาก</button>
+        <button class="stab" onclick="switchTab('guide')" id="tab-guide">📏 Guide</button>
+      </div>
+      <div class="sheet-body" id="sheetBody"></div>
+    </div>
+  </div>
+</div>
+
+<img id="ghost" src="" alt="">
+<div class="snap-tip" id="snapTip"></div>
+<input type="file" id="fileIn" accept="image/*" multiple style="display:none" onchange="handleUpload(event)">
+
+<!-- PROJECT MODAL -->
+<div class="modal-overlay" id="projectModal" onclick="if(event.target===this)closeModal('projectModal')">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>📁 โปรเจ็คของฉัน</h3>
+      <div class="modal-close" onclick="closeModal('projectModal')">✕</div>
+    </div>
+    <div class="modal-body" id="projectList"></div>
+    <div class="modal-foot">
+      <input class="modal-input" id="newProjName" placeholder="ชื่อโปรเจ็คใหม่..." style="margin-bottom:8px">
+      <button class="tbtn tbtn-primary" style="width:100%;justify-content:center;display:flex;"
+        onclick="createProject()">➕ สร้างโปรเจ็คใหม่</button>
+    </div>
+  </div>
+</div>
+
+<!-- SHARE MODAL -->
+<div class="modal-overlay" id="shareModal" onclick="if(event.target===this)closeModal('shareModal')">
+  <div class="modal-box" style="max-width:360px">
+    <div class="modal-head">
+      <h3>🔗 แชร์โปรเจ็ค</h3>
+      <div class="modal-close" onclick="closeModal('shareModal')">✕</div>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--dim);line-height:1.7;margin-bottom:14px">
+        ส่งลิ้งนี้ให้คนอื่นเปิดโปรเจ็คร่วมกันได้ (ข้อมูลอยู่ในตัวลิ้งเลย ไม่ต้องล็อกอิน)
+      </p>
+      <div class="share-url">
+        <input type="text" id="shareUrlInput" readonly>
+        <button class="share-copy-btn" onclick="copyShareUrl()">คัดลอก</button>
+      </div>
+      <p style="font-size:10px;color:var(--dim);margin-top:10px;line-height:1.6">
+        ⚠️ ลิ้งจะยาวเพราะรวมรูปภาพทุกชิ้นไว้ด้วย ถ้าลิ้งยาวเกิน ลองลด object ก่อนแชร์
+      </p>
+    </div>
+    <div class="modal-foot">
+      <button class="abtn" style="width:100%" onclick="closeModal('shareModal')">ปิด</button>
+    </div>
+  </div>
+</div>
+
+<!-- DIM MODAL -->
+<div class="dim-modal-overlay" id="dimModalOverlay" onclick="if(event.target===this)skipDimModal()">
+  <div class="dim-modal">
+    <div class="dim-modal-head">
+      <img id="dimModalThumb" src="" alt="">
+      <div>
+        <div class="dim-modal-title">📐 ขนาดจริงของวัตถุ</div>
+        <div class="dim-modal-name" id="dimModalName"></div>
+      </div>
+    </div>
+    <div class="dim-modal-hint">ระบุความกว้าง/สูงจริง (ซม.) เพื่อล็อกสัดส่วนและจัดขนาดวัตถุบน canvas</div>
+    <div style="margin-bottom:10px">
+      <label style="font-size:10px;color:var(--dim);font-weight:700;display:block;margin-bottom:5px">หมวดหมู่</label>
+      <input type="text" id="dimCategory" placeholder="เช่น เฟอร์นิเจอร์, ต้นไม้, โครงสร้าง..."
+        class="modal-input" style="font-size:12px;padding:7px 10px">
+    </div>
+    <div class="dim-grid">
+      <div class="dim-field">
+        <label>กว้าง (ซม.)</label>
+        <input type="number" id="dimW" min="1" placeholder="เช่น 150"
+          oninput="syncDimAspect('w')" onkeydown="if(event.key==='Enter')saveDimModal()">
+      </div>
+      <div class="dim-field">
+        <label>สูง (ซม.)</label>
+        <input type="number" id="dimH" min="1" placeholder="เช่น 80"
+          oninput="syncDimAspect('h')" onkeydown="if(event.key==='Enter')saveDimModal()">
+      </div>
+    </div>
+    <label class="dim-checkbox">
+      <input type="checkbox" id="dimLockPhotoAspect" checked>
+      คำนวณอีกด้านอัตโนมัติตามสัดส่วนรูปภาพ
+    </label>
+    <div class="dim-modal-actions">
+      <button class="abtn" onclick="skipDimModal()">ข้าม</button>
+      <button class="abtn" style="background:var(--accent);color:#fff;border-color:var(--accent)"
+        onclick="saveDimModal()">✓ บันทึก</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  CONSTANTS & STATE
+// ═══════════════════════════════════════════════════════
+const DB_OBJECTS_KEY='bpv3_global_objects';
+const DB_PROJECTS_KEY='bpv3_projects';
+const CURRENT_PROJ_KEY='bpv3_current_project';
+
+let objects=[]; // global object library (persists)
+let items=[],selectedId=null;
+let zoom=1,panX=0,panY=0,nextZ=1;
+let sceneScale=2;
+let pendingDimQueue=[],dimModalObjId=null;
+let draggingItem=null,resizingItem=null,isPanning=false,panStart=null,spaceDown=false;
+let backgroundDragMoved=false;
+let showGuides=true;
+let guideOpts={centerH:true,centerV:true,thirds:false,snapToGuide:true,snapToItem:true,snapDist:10};
+
+// Project state
+let currentProjectId=null;
+let projects={}; // {id: {name, items, zoom, panX, panY, createdAt, updatedAt}}
+
+// Undo stack
+let undoStack=[]; // array of JSON snapshots
+const MAX_UNDO=40;
+
+// Double-tap state
+let lastTapId=null,lastTapTime=0;
+
+// sheet drag
+let sheetDragStartY=null,sheetDragStartH=null;
+let sheetExpanded=false;
+
+const canvasEl=document.getElementById('canvas');
+const wrap=document.getElementById('canvasWrap');
+const sheet=document.getElementById('bottomSheet');
+
+// ═══════════════════════════════════════════════════════
+//  STORAGE HELPERS — Firebase Firestore (shared/public)
+// ═══════════════════════════════════════════════════════
+
+// ── Debounce timer for saves ──
+let _saveObjectsTimer=null, _saveProjectsTimer=null;
+
+// ── Objects (image library) ──
+function saveGlobalObjects(){
+  // debounce 1.5s เพราะ src เป็น base64 ใหญ่
+  clearTimeout(_saveObjectsTimer);
+  _saveObjectsTimer=setTimeout(async()=>{
+    // strip src ออก ถ้าใหญ่เกิน 900KB per object → เก็บใน localStorage แทน
+    const MAX=900*1024;
+    const safe=objects.map(o=>({...o, src:o.src&&o.src.length>MAX?'__local__':o.src, thumb:o.thumb&&o.thumb.length>MAX?'__local__':o.thumb}));
+    const big=objects.filter(o=>(o.src&&o.src.length>MAX)||(o.thumb&&o.thumb.length>MAX));
+    if(big.length){
+      // เก็บรูปใหญ่ไว้ localStorage
+      try{localStorage.setItem(DB_OBJECTS_KEY+'_imgs',JSON.stringify(objects));}catch(e){}
+    }
+    await fsSet('objects',{list: safe, updatedAt: Date.now()});
+    // เก็บ localStorage เป็น fallback เสมอ
+    try{localStorage.setItem(DB_OBJECTS_KEY,JSON.stringify(objects));}catch(e){}
+  },1500);
+}
+async function loadGlobalObjects(){
+  // โหลด Firebase ก่อน
+  const data = await fsGet('objects');
+  if(data && data.list && data.list.length){
+    // ถ้ามี __local__ ให้ merge กับ localStorage
+    const localRaw = localStorage.getItem(DB_OBJECTS_KEY+'_imgs') || localStorage.getItem(DB_OBJECTS_KEY);
+    const localObjs = localRaw ? JSON.parse(localRaw) : [];
+    objects = data.list.map(o=>{
+      if(o.src==='__local__'||o.thumb==='__local__'){
+        const local = localObjs.find(l=>l.id===o.id);
+        return local ? local : o;
+      }
+      return o;
+    });
+  } else {
+    // fallback localStorage
+    try{const d=localStorage.getItem(DB_OBJECTS_KEY);if(d)objects=JSON.parse(d);}catch(e){objects=[];}
+  }
+}
+
+// ── Projects ──
+function saveProjects(){
+  clearTimeout(_saveProjectsTimer);
+  _saveProjectsTimer=setTimeout(async()=>{
+    await fsSet('projects',{data: projects, updatedAt: Date.now()});
+    try{localStorage.setItem(DB_PROJECTS_KEY,JSON.stringify(projects));}catch(e){}
+  },800);
+}
+async function loadProjects(){
+  const data = await fsGet('projects');
+  if(data && data.data){
+    projects = data.data;
+  } else {
+    try{const d=localStorage.getItem(DB_PROJECTS_KEY);if(d)projects=JSON.parse(d);}catch(e){projects={};}
+  }
+}
+
+function saveCurrentProjectState(){
+  if(!currentProjectId)return;
+  const p=projects[currentProjectId];
+  if(!p)return;
+  p.items=JSON.parse(JSON.stringify(items));
+  p.zoom=zoom;p.panX=panX;p.panY=panY;
+  p.updatedAt=Date.now();
+  saveProjects();
+}
+async function loadCurrentProject(){
+  const data = await fsGet('meta');
+  if(data && data.currentProjectId){
+    currentProjectId = data.currentProjectId;
+  } else {
+    try{const id=localStorage.getItem(CURRENT_PROJ_KEY);if(id)currentProjectId=id;}catch(e){}
+  }
+}
+function saveCurrentProjectId(){
+  fsSet('meta',{currentProjectId: currentProjectId||''});
+  try{localStorage.setItem(CURRENT_PROJ_KEY,currentProjectId||'');}catch(e){}
+}
+
+// ── Realtime sync: รับ update จาก device อื่น ──
+function startRealtimeSync(){
+  db.collection('shared').doc('projects').onSnapshot(snap=>{
+    if(!snap.exists)return;
+    const data=snap.data();
+    if(!data||!data.data)return;
+    // merge โดยไม่ overwrite project ที่กำลัง edit อยู่
+    const remote=data.data;
+    Object.keys(remote).forEach(id=>{
+      if(id===currentProjectId)return; // ไม่ overwrite ของตัวเอง
+      projects[id]=remote[id];
+    });
+    renderProjectList&&renderProjectList();
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+//  UNDO
+// ═══════════════════════════════════════════════════════
+function pushUndo(){
+  undoStack.push(JSON.stringify(items));
+  if(undoStack.length>MAX_UNDO) undoStack.shift();
+  updateUndoBtn();
+}
+function undo(){
+  if(!undoStack.length)return;
+  items=JSON.parse(undoStack.pop());
+  // restore nextZ
+  if(items.length) nextZ=Math.max(...items.map(i=>i.z))+1;
+  renderItems();
+  if(selectedId&&!items.find(i=>i.id===selectedId)){
+    selectedId=null;
+    document.getElementById('fabDel').style.display='none';
+  }
+  buildSheetBody();
+  updateUndoBtn();
+  setStatusMsg('↩ ย้อนกลับแล้ว');
+  autoSave();
+}
+function updateUndoBtn(){
+  const btn=document.getElementById('fabUndo');
+  btn.style.opacity=undoStack.length?'1':'0.35';
+  btn.style.pointerEvents=undoStack.length?'':'none';
+}
+
+// auto-save wrapper
+function autoSave(){
+  saveCurrentProjectState();
+}
+
+// ═══════════════════════════════════════════════════════
+//  PROJECT MANAGEMENT
+// ═══════════════════════════════════════════════════════
+function createProject(nameOverride){
+  const nameEl=document.getElementById('newProjName');
+  const name=(nameOverride||nameEl?.value||'').trim()||('โปรเจ็ค '+(Object.keys(projects).length+1));
+  const id='proj_'+Date.now();
+  projects[id]={name,items:[],zoom:1,panX:0,panY:0,createdAt:Date.now(),updatedAt:Date.now()};
+  saveProjects();
+  switchProject(id);
+  if(nameEl) nameEl.value='';
+  closeModal('projectModal');
+  setStatusMsg('📁 สร้างโปรเจ็ค "'+name+'" แล้ว');
+}
+function switchProject(id){
+  if(currentProjectId) saveCurrentProjectState();
+  currentProjectId=id;
+  saveCurrentProjectId();
+  const p=projects[id];
+  items=JSON.parse(JSON.stringify(p.items||[]));
+  zoom=p.zoom||1;panX=p.panX||0;panY=p.panY||0;
+  nextZ=items.length?Math.max(...items.map(i=>i.z))+1:1;
+  selectedId=null;undoStack=[];
+  updateUndoBtn();
+  applyViewTransform();renderGuides();renderItems();
+  buildSheetBody();
+  updateProjectLabel();
+  document.getElementById('fabDel').style.display='none';
+}
+function deleteProject(id,e){
+  e.stopPropagation();
+  const p=projects[id];if(!p)return;
+  if(!confirm('ลบโปรเจ็ค "'+p.name+'" ?'))return;
+  delete projects[id];
+  saveProjects();
+  if(currentProjectId===id){
+    currentProjectId=null;
+    items=[];zoom=1;panX=0;panY=0;nextZ=1;selectedId=null;
+    renderItems();applyViewTransform();renderGuides();
+    updateProjectLabel();
+  }
+  renderProjectList();
+}
+function updateProjectLabel(){
+  const p=currentProjectId&&projects[currentProjectId];
+  document.getElementById('projNameLabel').textContent=p?('📁 '+p.name):'';
+}
+function openProjectModal(){
+  renderProjectList();
+  document.getElementById('projectModal').classList.add('open');
+}
+function renderProjectList(){
+  const list=document.getElementById('projectList');
+  const ids=Object.keys(projects).sort((a,b)=>projects[b].updatedAt-projects[a].updatedAt);
+  if(!ids.length){list.innerHTML='<div class="no-sel"><div class="icon">📁</div>ยังไม่มีโปรเจ็ค<br>สร้างใหม่ด้านล่างได้เลย</div>';return;}
+  list.innerHTML=ids.map(id=>{
+    const p=projects[id];
+    const d=new Date(p.updatedAt);
+    const dateStr=d.toLocaleDateString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+    const isCur=id===currentProjectId;
+    return `<div class="proj-item${isCur?' current':''}" onclick="switchProject('${id}');closeModal('projectModal')">
+      <div style="font-size:20px">${isCur?'📂':'📁'}</div>
+      <div class="proj-info">
+        <div class="proj-name">${p.name}</div>
+        <div class="proj-meta">${(p.items||[]).length} objects · อัพเดต ${dateStr}</div>
+      </div>
+      <button class="proj-del" onclick="deleteProject('${id}',event)">🗑</button>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════
+//  SHARE / COWORK LINK
+// ═══════════════════════════════════════════════════════
+function openShareModal(){
+  if(!currentProjectId){alert('กรุณาเปิดโปรเจ็คก่อนแชร์');return;}
+  saveCurrentProjectState();
+  const p=projects[currentProjectId];
+  const payload={
+    projectName:p.name,
+    objects:objects,
+    items:p.items,
+    zoom:p.zoom,panX:p.panX,panY:p.panY
+  };
+  try{
+    const json=JSON.stringify(payload);
+    const b64=btoa(unescape(encodeURIComponent(json)));
+    const url=window.location.href.split('?')[0].split('#')[0]+'?bp='+b64;
+    document.getElementById('shareUrlInput').value=url;
+    document.getElementById('shareModal').classList.add('open');
+  }catch(e){alert('ข้อมูลใหญ่เกินไป ลอง export PNG แทน');}
+}
+function copyShareUrl(){
+  const inp=document.getElementById('shareUrlInput');
+  inp.select();
+  try{navigator.clipboard.writeText(inp.value);}catch(e){document.execCommand('copy');}
+  setStatusMsg('✅ คัดลอกลิ้งแล้ว!');
+}
+function tryLoadFromUrl(){
+  const params=new URLSearchParams(window.location.search);
+  const b64=params.get('bp');
+  if(!b64)return false;
+  try{
+    const json=decodeURIComponent(escape(atob(b64)));
+    const payload=JSON.parse(json);
+    // merge objects (avoid dup by id)
+    (payload.objects||[]).forEach(o=>{if(!objects.find(x=>x.id===o.id))objects.push(o);});
+    saveGlobalObjects();
+    // create or update project
+    const id='proj_shared_'+Date.now();
+    projects[id]={
+      name:(payload.projectName||'Shared')+' (รับมา)',
+      items:payload.items||[],
+      zoom:payload.zoom||1,panX:payload.panX||0,panY:payload.panY||0,
+      createdAt:Date.now(),updatedAt:Date.now()
+    };
+    saveProjects();
+    switchProject(id);
+    // clean URL
+    history.replaceState(null,'',window.location.pathname);
+    setStatusMsg('📥 โหลดโปรเจ็คจากลิ้งสำเร็จ!');
+    return true;
+  }catch(e){console.error(e);return false;}
+}
+
+function closeModal(id){
+  document.getElementById(id).classList.remove('open');
+}
+
+// ═══════════════════════════════════════════════════════
+//  UPLOAD
+// ═══════════════════════════════════════════════════════
+function handleUpload(e){
+  Array.from(e.target.files).forEach(file=>{
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      const img=new Image();
+      img.onload=()=>{
+        const tc=document.createElement('canvas');tc.width=80;tc.height=68;
+        const cx=tc.getContext('2d');
+        const ar=img.width/img.height;
+        let tw=80,th=68;
+        if(ar>tw/th)th=tw/ar;else tw=th*ar;
+        cx.drawImage(img,(80-tw)/2,(68-th)/2,tw,th);
+        const newObj={
+          id:'o'+Date.now()+Math.random().toString(36).slice(2,5),
+          src:ev.target.result,name:file.name.replace(/\.[^.]+$/,'').slice(0,20),
+          thumb:tc.toDataURL(),natW:img.width,natH:img.height,
+          realW:null,realH:null,category:'ทั่วไป',
+        };
+        objects.push(newObj);
+        saveGlobalObjects();
+        buildSheetBody();
+        queueDimAsk(newObj.id);
+      };
+      img.src=ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+  e.target.value='';
+}
+
+function objAspect(obj){
+  if(!obj)return 1;
+  if(obj.realW>0&&obj.realH>0)return obj.realH/obj.realW;
+  return obj.natH/obj.natW;
+}
+
+// ═══════════════════════════════════════════════════════
+//  DIM MODAL
+// ═══════════════════════════════════════════════════════
+function queueDimAsk(objId){pendingDimQueue.push(objId);if(!dimModalObjId)processDimQueue();}
+function processDimQueue(){if(!pendingDimQueue.length){dimModalObjId=null;return;}openDimModal(pendingDimQueue.shift());}
+function openDimModal(objId){
+  const obj=objects.find(o=>o.id===objId);if(!obj)return;
+  dimModalObjId=objId;
+  document.getElementById('dimModalThumb').src=obj.thumb;
+  document.getElementById('dimModalName').textContent=obj.name;
+  document.getElementById('dimW').value=obj.realW||'';
+  document.getElementById('dimH').value=obj.realH||'';
+  document.getElementById('dimCategory').value=obj.category||'ทั่วไป';
+  document.getElementById('dimLockPhotoAspect').checked=true;
+  document.getElementById('dimModalOverlay').style.display='flex';
+  setTimeout(()=>document.getElementById('dimW').focus(),50);
+}
+function editObjDim(objId){if(!objId)return;openDimModal(objId);}
+function syncDimAspect(changed){
+  const obj=objects.find(o=>o.id===dimModalObjId);if(!obj)return;
+  if(!document.getElementById('dimLockPhotoAspect').checked)return;
+  const ar=obj.natH/obj.natW;
+  const wEl=document.getElementById('dimW'),hEl=document.getElementById('dimH');
+  if(changed==='w'){const w=parseFloat(wEl.value);if(w>0)hEl.value=Math.round(w*ar*10)/10;}
+  else{const h=parseFloat(hEl.value);if(h>0)wEl.value=Math.round(h/ar*10)/10;}
+}
+function closeDimModal(){document.getElementById('dimModalOverlay').style.display='none';dimModalObjId=null;}
+function skipDimModal(){closeDimModal();processDimQueue();buildSheetBody();}
+function saveDimModal(){
+  const obj=objects.find(o=>o.id===dimModalObjId);
+  if(!obj){closeDimModal();return;}
+  const w=parseFloat(document.getElementById('dimW').value);
+  const h=parseFloat(document.getElementById('dimH').value);
+  const cat=(document.getElementById('dimCategory').value||'ทั่วไป').trim();
+  if(w>0&&h>0){obj.realW=w;obj.realH=h;}
+  obj.category=cat||'ทั่วไป';
+  saveGlobalObjects();
+  closeDimModal();processDimQueue();buildSheetBody();
+  setStatusMsg(w>0&&h>0?`📐 ตั้งขนาดจริง ${obj.name}: ${w}×${h} ซม.`:'บันทึกแล้ว');
+}
+
+// ═══════════════════════════════════════════════════════
+//  PLACE FROM LIBRARY
+// ═══════════════════════════════════════════════════════
+function placeObject(oid){
+  const obj=objects.find(o=>o.id===oid);if(!obj)return;
+  if(!currentProjectId) createProjectSilent();
+  pushUndo();
+  const ar=objAspect(obj);
+  const defW=(obj.realW>0)?Math.min(4000,Math.max(20,obj.realW*sceneScale)):Math.min(180,wrap.clientWidth*.35);
+  const defH=Math.round(defW*ar);
+  const item={id:'i'+Date.now(),objId:oid,x:-defW/2,y:-defH/2,w:defW,h:defH,z:nextZ++,flipX:false,locked:false};
+  items.push(item);
+  renderItems();selectItem(item.id);switchTab('props');
+  setStatusMsg('วาง '+obj.name+' แล้ว');
+  autoSave();
+}
+function createProjectSilent(){
+  const id='proj_'+Date.now();
+  const name='โปรเจ็ค '+(Object.keys(projects).length+1);
+  projects[id]={name,items:[],zoom:1,panX:0,panY:0,createdAt:Date.now(),updatedAt:Date.now()};
+  saveProjects();
+  currentProjectId=id;
+  saveCurrentProjectId();
+  updateProjectLabel();
+}
+
+// ═══════════════════════════════════════════════════════
+//  RENDER ITEMS
+// ═══════════════════════════════════════════════════════
+function renderItems(){
+  canvasEl.querySelectorAll('.ci').forEach(el=>{
+    if(!items.find(i=>i.id===el.dataset.id))el.remove();
+  });
+  [...items].sort((a,b)=>a.z-b.z).forEach((item,idx)=>{
+    const obj=objects.find(o=>o.id===item.objId);if(!obj)return;
+    let el=canvasEl.querySelector(`.ci[data-id="${item.id}"]`);
+    if(!el){
+      el=document.createElement('div');
+      el.className='ci';el.dataset.id=item.id;
+      el.innerHTML=`<img src="${obj.src}" draggable="false">
+        <div class="ci-pos-label" id="poslbl-${item.id}"></div>
+        <div class="ci-handle-tl" title="ปรับขนาด">↖</div>
+        <div class="ci-handle" title="ปรับขนาด">↘</div>
+        <div class="ci-lock-btn" title="ล็อก/ปลดล็อก">🔓</div>`;
+      canvasEl.appendChild(el);
+      bindItemEvents(el);
+    }
+    el.style.left=item.x+'px';el.style.top=item.y+'px';
+    el.style.width=item.w+'px';el.style.height=item.h+'px';
+    el.style.zIndex=idx+1;
+    el.style.transform=`scaleX(${item.flipX?-1:1})`;
+    el.classList.toggle('selected',item.id===selectedId);
+    el.classList.toggle('locked',!!item.locked);
+    el.classList.toggle('editing-target',item.id===selectedId&&sheetExpanded);
+    const lockBtn=el.querySelector('.ci-lock-btn');
+    if(lockBtn)lockBtn.textContent=item.locked?'🔒':'🔓';
+    const lbl=document.getElementById('poslbl-'+item.id);
+    if(lbl)lbl.textContent=`X:${Math.round(item.x)} Y:${Math.round(item.y)}`;
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+//  SNAP
+// ═══════════════════════════════════════════════════════
+function getGuidePositions(){
+  const W=wrap.clientWidth,H=wrap.clientHeight;
+  const cx=(0-panX)/zoom,cy=(0-panY)/zoom;
+  const hw=W/2/zoom,hh=H/2/zoom;
+  const guides=[];
+  if(guideOpts.centerH)guides.push({type:'h',val:cy});
+  if(guideOpts.centerV)guides.push({type:'v',val:cx});
+  if(guideOpts.thirds){
+    guides.push({type:'h',val:cy-hh/1.5},{type:'h',val:cy+hh/1.5});
+    guides.push({type:'v',val:cx-hw/1.5},{type:'v',val:cx+hw/1.5});
+  }
+  return guides;
+}
+function snapValue(val,guides,axis,snapDist){
+  let best=null,bd=snapDist;
+  guides.filter(g=>g.type===axis).forEach(g=>{const d=Math.abs(val-g.val);if(d<bd){bd=d;best=g.val;}});
+  return{snapped:best!==null,val:best!==null?best:val};
+}
+function snapItem(item){
+  if(!guideOpts.snapToGuide)return{x:item.x,y:item.y,snapX:false,snapY:false};
+  const sd=guideOpts.snapDist/zoom;
+  const guides=getGuidePositions();
+  let sx=item.x,snapX=false,sy=item.y,snapY=false;
+  const xVals=[item.x,item.x+item.w/2,item.x+item.w];
+  const yVals=[item.y,item.y+item.h/2,item.y+item.h];
+  xVals.forEach((xv,i)=>{const r=snapValue(xv,guides,'v',sd);if(r.snapped){sx=r.val-(i===0?0:i===1?item.w/2:item.w);snapX=true;}});
+  yVals.forEach((yv,i)=>{const r=snapValue(yv,guides,'h',sd);if(r.snapped){sy=r.val-(i===0?0:i===1?item.h/2:item.h);snapY=true;}});
+  if(guideOpts.snapToItem){
+    items.filter(it=>it.id!==item.id).forEach(other=>{
+      const oEdgesX=[other.x,other.x+other.w/2,other.x+other.w];
+      const oEdgesY=[other.y,other.y+other.h/2,other.y+other.h];
+      xVals.forEach((xv,i)=>{oEdgesX.forEach(oe=>{if(Math.abs(xv-oe)<sd){sx=oe-(i===0?0:i===1?item.w/2:item.w);snapX=true;}});});
+      yVals.forEach((yv,i)=>{oEdgesY.forEach(oe=>{if(Math.abs(yv-oe)<sd){sy=oe-(i===0?0:i===1?item.h/2:item.h);snapY=true;}});});
+    });
+  }
+  return{x:sx,y:sy,snapX,snapY};
+}
+
+// ═══════════════════════════════════════════════════════
+//  GUIDES
+// ═══════════════════════════════════════════════════════
+function renderGuides(){
+  const gc=document.getElementById('guideContainer');gc.innerHTML='';if(!showGuides)return;
+  const W=wrap.clientWidth,H=wrap.clientHeight;
+  function makeLine(cls,style){const d=document.createElement('div');d.className='guide-line '+cls;Object.assign(d.style,style);gc.appendChild(d);}
+  if(guideOpts.centerH)makeLine('h center',{top:(panY+H/2)+'px'});
+  if(guideOpts.centerV)makeLine('v vline',{left:(panX+W/2)+'px'});
+  if(guideOpts.thirds){
+    const y1=panY+H/2-H/zoom/3*zoom/2,y2=panY+H/2+H/zoom/3*zoom/2;
+    makeLine('h third',{top:y1+'px'});makeLine('h third',{top:y2+'px'});
+    const x1=panX+W/2-W/zoom/3*zoom/2,x2=panX+W/2+W/zoom/3*zoom/2;
+    makeLine('v vline third',{left:x1+'px',borderColor:'rgba(59,130,246,.3)'});
+    makeLine('v vline third',{left:x2+'px',borderColor:'rgba(59,130,246,.3)'});
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  ITEM EVENTS
+// ═══════════════════════════════════════════════════════
+function bindItemEvents(el){
+  el.querySelector('.ci-lock-btn').addEventListener('click',e=>{e.stopPropagation();toggleItemLock(el.dataset.id);});
+
+  // double-tap detection
+  el.addEventListener('touchend',e=>{
+    const now=Date.now();
+    if(lastTapId===el.dataset.id&&now-lastTapTime<400){
+      // double tap — open sheet
+      e.preventDefault();
+      openSheetForEditing(el.dataset.id);
+    }
+    lastTapId=el.dataset.id;lastTapTime=now;
+  });
+  // double click (desktop)
+  el.addEventListener('dblclick',e=>{e.stopPropagation();openSheetForEditing(el.dataset.id);});
+
+  el.addEventListener('mousedown',e=>{
+    if(e.target.classList.contains('ci-handle')||e.target.classList.contains('ci-handle-tl')||e.target.classList.contains('ci-lock-btn'))return;
+    e.stopPropagation();if(spaceDown)return;
+    const item=items.find(i=>i.id===el.dataset.id);
+    selectItem(item.id);
+    if(item.locked){setStatusMsg('🔒 Object นี้ถูกล็อกอยู่');e.preventDefault();return;}
+    draggingItem={id:item.id,startX:e.clientX,startY:e.clientY,origX:item.x,origY:item.y,moved:false};
+    e.preventDefault();
+  });
+  el.addEventListener('click',e=>{e.stopPropagation();selectItem(el.dataset.id);});
+
+  el.querySelector('.ci-handle').addEventListener('mousedown',e=>{
+    e.stopPropagation();const item=items.find(i=>i.id===el.dataset.id);if(item.locked)return;
+    pushUndo();
+    resizingItem={id:item.id,startX:e.clientX,startY:e.clientY,origW:item.w,origH:item.h,corner:'br'};e.preventDefault();
+  });
+  el.querySelector('.ci-handle-tl').addEventListener('mousedown',e=>{
+    e.stopPropagation();const item=items.find(i=>i.id===el.dataset.id);if(item.locked)return;
+    pushUndo();
+    resizingItem={id:item.id,startX:e.clientX,startY:e.clientY,origW:item.w,origH:item.h,origX:item.x,origY:item.y,corner:'tl'};e.preventDefault();
+  });
+
+  el.addEventListener('touchstart',e=>{
+    if(e.touches.length!==1)return;
+    if(e.target.classList.contains('ci-lock-btn')){e.stopPropagation();toggleItemLock(el.dataset.id);return;}
+    if(e.target.classList.contains('ci-handle')||e.target.classList.contains('ci-handle-tl')){
+      e.stopPropagation();const item=items.find(i=>i.id===el.dataset.id);if(item.locked)return;
+      pushUndo();
+      resizingItem={id:item.id,startX:e.touches[0].clientX,startY:e.touches[0].clientY,
+        origW:item.w,origH:item.h,origX:item.x,origY:item.y,
+        corner:e.target.classList.contains('ci-handle-tl')?'tl':'br'};return;
+    }
+    e.stopPropagation();
+    const item=items.find(i=>i.id===el.dataset.id);
+    selectItem(item.id);
+    if(item.locked){setStatusMsg('🔒 Object นี้ถูกล็อกอยู่');return;}
+    draggingItem={id:item.id,startX:e.touches[0].clientX,startY:e.touches[0].clientY,origX:item.x,origY:item.y,moved:false};
+  },{passive:true});
+}
+
+function openSheetForEditing(id){
+  selectItem(id);
+  switchTab('props');
+  expandSheet();
+  // scroll item into visible area above sheet
+  scrollItemIntoView(id);
+}
+function scrollItemIntoView(id){
+  const item=items.find(i=>i.id===id);if(!item)return;
+  // compute screen position of item center
+  const screenX=item.x*zoom+panX+wrap.clientWidth/2;
+  const sheetH=sheet.offsetHeight;
+  const availH=wrap.clientHeight-sheetH-32; // 32=statusbar
+  const screenY=item.y*zoom+panY+wrap.clientHeight/2;
+  // if item is behind sheet, nudge pan up
+  if(screenY+item.h*zoom/2>availH){
+    const targetY=availH/2;
+    panY=targetY-item.y*zoom;
+    applyViewTransform();renderGuides();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  MOUSE/TOUCH MOVE
+// ═══════════════════════════════════════════════════════
+document.addEventListener('mousemove',e=>{
+  if(draggingItem){
+    const item=items.find(i=>i.id===draggingItem.id);if(!item)return;
+    const dx=e.clientX-draggingItem.startX, dy=e.clientY-draggingItem.startY;
+    if(Math.abs(dx)>2||Math.abs(dy)>2){
+      if(!draggingItem.moved){pushUndo();draggingItem.moved=true;}
+      backgroundDragMoved=true;
+    }
+    item.x=draggingItem.origX+dx/zoom;item.y=draggingItem.origY+dy/zoom;
+    const snapped=snapItem(item);item.x=snapped.x;item.y=snapped.y;
+    showSnapTip(snapped.snapX||snapped.snapY,e.clientX,e.clientY);
+    renderItems();updatePropsXY();
+  }
+  if(resizingItem){
+    const item=items.find(i=>i.id===resizingItem.id);if(!item)return;
+    const dx=(e.clientX-resizingItem.startX)/zoom,dy=(e.clientY-resizingItem.startY)/zoom;
+    const obj=objects.find(o=>o.id===item.objId);const ar=objAspect(obj);
+    if(resizingItem.corner==='br'){item.w=Math.max(40,resizingItem.origW+dx);item.h=Math.round(item.w*ar);}
+    else{const newW=Math.max(40,resizingItem.origW-dx);item.x=resizingItem.origX+(resizingItem.origW-newW);item.y=resizingItem.origY+(resizingItem.origH-Math.round(newW*ar));item.w=newW;item.h=Math.round(newW*ar);}
+    renderItems();updatePropsXY();
+  }
+  if(isPanning&&panStart){
+    panX=panStart.px+(e.clientX-panStart.x);panY=panStart.py+(e.clientY-panStart.y);
+    applyViewTransform();renderGuides();
+  }
+});
+document.addEventListener('mouseup',()=>{
+  if(draggingItem&&draggingItem.moved)autoSave();
+  if(resizingItem)autoSave();
+  draggingItem=null;resizingItem=null;isPanning=false;panStart=null;hideSnapTip();
+});
+
+document.addEventListener('touchmove',e=>{
+  if(draggingItem&&e.touches.length===1){
+    const item=items.find(i=>i.id===draggingItem.id);if(!item)return;
+    const dx=e.touches[0].clientX-draggingItem.startX, dy=e.touches[0].clientY-draggingItem.startY;
+    if(Math.abs(dx)>2||Math.abs(dy)>2){
+      if(!draggingItem.moved){pushUndo();draggingItem.moved=true;}
+      backgroundDragMoved=true;
+    }
+    item.x=draggingItem.origX+dx/zoom;item.y=draggingItem.origY+dy/zoom;
+    const snapped=snapItem(item);item.x=snapped.x;item.y=snapped.y;
+    renderItems();updatePropsXY();
+  }
+  if(resizingItem&&e.touches.length===1){
+    const item=items.find(i=>i.id===resizingItem.id);if(!item)return;
+    const dx=(e.touches[0].clientX-resizingItem.startX)/zoom;
+    const obj=objects.find(o=>o.id===item.objId);const ar=objAspect(obj);
+    if(resizingItem.corner==='br'){item.w=Math.max(40,resizingItem.origW+dx);item.h=Math.round(item.w*ar);}
+    else{const newW=Math.max(40,resizingItem.origW-dx);item.x=resizingItem.origX+(resizingItem.origW-newW);item.w=newW;item.h=Math.round(newW*ar);}
+    renderItems();updatePropsXY();
+  }
+},{passive:true});
+document.addEventListener('touchend',()=>{
+  if(draggingItem&&draggingItem.moved)autoSave();
+  if(resizingItem)autoSave();
+  draggingItem=null;resizingItem=null;hideSnapTip();
+});
+
+function showSnapTip(show,cx,cy){
+  const tip=document.getElementById('snapTip');
+  if(show){tip.style.display='block';tip.style.left=(cx+12)+'px';tip.style.top=(cy-28)+'px';tip.textContent='⊕ Snap!';}
+  else tip.style.display='none';
+}
+function hideSnapTip(){document.getElementById('snapTip').style.display='none';}
+
+// ═══════════════════════════════════════════════════════
+//  PAN & ZOOM
+// ═══════════════════════════════════════════════════════
+wrap.addEventListener('mousedown',e=>{
+  if(spaceDown||e.button===1){isPanning=true;panStart={x:e.clientX,y:e.clientY,px:panX,py:panY};wrap.style.cursor='grabbing';e.preventDefault();return;}
+  if(selectedId){const item=items.find(i=>i.id===selectedId);if(item&&!item.locked){backgroundDragMoved=false;draggingItem={id:selectedId,startX:e.clientX,startY:e.clientY,origX:item.x,origY:item.y,moved:false};e.preventDefault();}}
+});
+wrap.addEventListener('mouseup',()=>{wrap.style.cursor=spaceDown?'grab':'';});
+
+let touchPanStart=null,singlePanStart=null;
+wrap.addEventListener('touchstart',e=>{
+  if(e.touches.length===1){
+    touchPanStart=null;singlePanStart=null;
+    if(selectedId){const item=items.find(i=>i.id===selectedId);if(item&&!item.locked){backgroundDragMoved=false;draggingItem={id:selectedId,startX:e.touches[0].clientX,startY:e.touches[0].clientY,origX:item.x,origY:item.y,moved:false};}}
+    if(!draggingItem){singlePanStart={x:e.touches[0].clientX,y:e.touches[0].clientY,px:panX,py:panY};}
+  }else if(e.touches.length===2){
+    singlePanStart=null;draggingItem=null;
+    touchPanStart={x:(e.touches[0].clientX+e.touches[1].clientX)/2,y:(e.touches[0].clientY+e.touches[1].clientY)/2,px:panX,py:panY,dist:Math.hypot(e.touches[1].clientX-e.touches[0].clientX,e.touches[1].clientY-e.touches[0].clientY),zoom};
+  }
+},{passive:true});
+wrap.addEventListener('touchmove',e=>{
+  if(e.touches.length===1&&singlePanStart){panX=singlePanStart.px+(e.touches[0].clientX-singlePanStart.x);panY=singlePanStart.py+(e.touches[0].clientY-singlePanStart.y);applyViewTransform();renderGuides();}
+  else if(e.touches.length===2&&touchPanStart){
+    const mx=(e.touches[0].clientX+e.touches[1].clientX)/2,my=(e.touches[0].clientY+e.touches[1].clientY)/2;
+    panX=touchPanStart.px+(mx-touchPanStart.x);panY=touchPanStart.py+(my-touchPanStart.y);
+    const dist=Math.hypot(e.touches[1].clientX-e.touches[0].clientX,e.touches[1].clientY-e.touches[0].clientY);
+    zoom=Math.min(4,Math.max(.15,touchPanStart.zoom*(dist/touchPanStart.dist)));
+    applyViewTransform();renderGuides();
+  }
+},{passive:true});
+wrap.addEventListener('touchend',e=>{if(e.touches.length<2)touchPanStart=null;if(e.touches.length<1)singlePanStart=null;});
+wrap.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const f=e.deltaY<0?1.1:.91;
+  const rect=wrap.getBoundingClientRect();
+  const mx=e.clientX-rect.left-wrap.clientWidth/2;
+  const my=e.clientY-rect.top-wrap.clientHeight/2;
+  panX=mx-(mx-panX)*f;panY=my-(my-panY)*f;
+  zoom=Math.min(4,Math.max(.15,zoom*f));
+  applyViewTransform();renderGuides();
+},{passive:false});
+
+function zoomBy(f){setZoomAbs(zoom*f);}
+function setZoomAbs(v){const nz=Math.min(4,Math.max(.15,v));const r=nz/zoom;panX*=r;panY*=r;zoom=nz;applyViewTransform();renderGuides();}
+function resetView(){zoom=1;panX=0;panY=0;applyViewTransform();renderGuides();}
+function applyViewTransform(){
+  canvasEl.style.transform=`translate(${panX}px,${panY}px) scale(${zoom})`;
+  document.getElementById('zoomLabel').textContent=Math.round(zoom*100)+'%';
+}
+
+// ═══════════════════════════════════════════════════════
+//  SELECT
+// ═══════════════════════════════════════════════════════
+function selectItem(id){
+  selectedId=id;renderItems();updatePropsXY();
+  document.getElementById('fabDel').style.display=id?'flex':'none';
+  if(id)setStatusMsg('เลือก object แล้ว — ดับเบิ้ลแตะเพื่อแก้ไข');
+  else setStatusMsg('แตะ object เพื่อเลือก');
+}
+function setStatusMsg(msg){document.getElementById('statusMsg').textContent=msg;}
+canvasEl.addEventListener('click',e=>{if(e.target===canvasEl)selectItem(null);});
+wrap.addEventListener('click',e=>{
+  if(backgroundDragMoved){backgroundDragMoved=false;return;}
+  if(e.target===wrap||e.target===canvasEl)selectItem(null);
+});
+
+// ═══════════════════════════════════════════════════════
+//  KEYBOARD
+// ═══════════════════════════════════════════════════════
+document.addEventListener('keydown',e=>{
+  if(e.key===' '&&!e.repeat){spaceDown=true;wrap.style.cursor='grab';e.preventDefault();}
+  if((e.key==='Delete'||e.key==='Backspace')&&document.activeElement.tagName!=='INPUT')deleteSelected();
+  if(e.key===']')bringForward();if(e.key==='[')sendBackward();
+  if(e.key==='Escape')selectItem(null);
+  if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();undo();}
+  const item=items.find(i=>i.id===selectedId);
+  if(item&&!item.locked&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){
+    e.preventDefault();const step=e.shiftKey?10:1;
+    if(e.key==='ArrowLeft')item.x-=step;if(e.key==='ArrowRight')item.x+=step;
+    if(e.key==='ArrowUp')item.y-=step;if(e.key==='ArrowDown')item.y+=step;
+    renderItems();updatePropsXY();
+  }
+});
+document.addEventListener('keyup',e=>{if(e.key===' '){spaceDown=false;wrap.style.cursor='';}});
+
+// ═══════════════════════════════════════════════════════
+//  PROPS
+// ═══════════════════════════════════════════════════════
+function updatePropsXY(){if(activeTab==='props')buildSheetBody();}
+function setItemX(val){const item=items.find(i=>i.id===selectedId);if(!item||item.locked)return;pushUndo();item.x=parseInt(val)||0;renderItems();autoSave();}
+function setItemY(val){const item=items.find(i=>i.id===selectedId);if(!item||item.locked)return;pushUndo();item.y=parseInt(val)||0;renderItems();autoSave();}
+function nudgeX(d){const item=items.find(i=>i.id===selectedId);if(!item||item.locked)return;item.x+=d;renderItems();buildSheetBody();autoSave();}
+function nudgeY(d){const item=items.find(i=>i.id===selectedId);if(!item||item.locked)return;item.y+=d;renderItems();buildSheetBody();autoSave();}
+function setItemW(val){
+  const item=items.find(i=>i.id===selectedId);if(!item||item.locked)return;
+  pushUndo();const obj=objects.find(o=>o.id===item.objId);const ar=objAspect(obj);
+  item.w=Math.max(20,parseInt(val)||item.w);item.h=Math.round(item.w*ar);
+  renderItems();buildSheetBody();autoSave();
+}
+function setItemH(val){
+  const item=items.find(i=>i.id===selectedId);if(!item||item.locked)return;
+  pushUndo();const obj=objects.find(o=>o.id===item.objId);const ar=objAspect(obj);
+  item.h=Math.max(20,parseInt(val)||item.h);item.w=Math.round(item.h/ar);
+  renderItems();buildSheetBody();autoSave();
+}
+function alignItem(type){
+  const item=items.find(i=>i.id===selectedId);if(!item||item.locked)return;
+  pushUndo();
+  const W=wrap.clientWidth/zoom,H=wrap.clientHeight/zoom;
+  const cx=-panX/zoom,cy=-panY/zoom;
+  if(type==='cl')item.x=cx-item.w/2;if(type==='ct')item.y=cy-item.h/2;
+  if(type==='cr')item.x=cx+W/2-item.w/2;if(type==='cb')item.y=cy+H/2-item.h/2;
+  renderItems();buildSheetBody();autoSave();
+}
+
+// ═══════════════════════════════════════════════════════
+//  BOTTOM SHEET
+// ═══════════════════════════════════════════════════════
+let activeTab='library';
+const SHEET_COLLAPSED_H=160;// px — just enough for drag handle + tabs
+const SHEET_EXPANDED_H='60vh';
+const SHEET_FULL_H='80vh';
+
+function expandSheet(){
+  sheetExpanded=true;
+  sheet.style.height=SHEET_EXPANDED_H;
+  document.getElementById('sheetChevron').textContent='▼';
+  renderItems();// re-render to show/hide editing ring
+}
+function collapseSheet(){
+  sheetExpanded=false;
+  sheet.style.height=SHEET_COLLAPSED_H+'px';
+  document.getElementById('sheetChevron').textContent='▲';
+  renderItems();
+}
+
+function switchTab(t){
+  activeTab=t;
+  document.querySelectorAll('.stab').forEach(el=>el.classList.remove('active'));
+  document.getElementById('tab-'+t)?.classList.add('active');
+  const titles={library:'LIBRARY',props:'OBJECT',scene:'SCENE',guide:'GUIDE'};
+  document.getElementById('sheetTitle').textContent=titles[t]||'';
+  if(!sheetExpanded)expandSheet();
+  buildSheetBody();
+}
+
+// Sheet drag (resize by dragging)
+let sdDrag=null;
+const sheetDragEl=document.getElementById('sheetDrag');
+sheetDragEl.addEventListener('touchstart',e=>{
+  sdDrag={startY:e.touches[0].clientY,startH:sheet.offsetHeight};
+},{passive:true});
+sheetDragEl.addEventListener('touchmove',e=>{
+  if(!sdDrag)return;
+  const dy=sdDrag.startY-e.touches[0].clientY;// drag up = positive
+  const newH=Math.max(SHEET_COLLAPSED_H,Math.min(window.innerHeight*0.85,sdDrag.startH+dy));
+  sheet.style.height=newH+'px';
+  sheet.style.transition='none';
+},{passive:true});
+sheetDragEl.addEventListener('touchend',e=>{
+  sheet.style.transition='';
+  if(!sdDrag)return;
+  const finalH=sheet.offsetHeight;
+  if(finalH<SHEET_COLLAPSED_H+40)collapseSheet();
+  else{sheetExpanded=true;document.getElementById('sheetChevron').textContent='▼';renderItems();}
+  sdDrag=null;
+});
+// Tap to toggle
+sheetDragEl.addEventListener('click',e=>{
+  if(sdDrag)return;
+  if(sheetExpanded)collapseSheet();else expandSheet();
+  buildSheetBody();
+});
+
+// ─── COLLAPSED STATE = tabs still visible, just no body content shown ───
+// We keep the sheet always visible; collapsed means only drag handle + tabs
+
+function buildSheetBody(){
+  const body=document.getElementById('sheetBody');
+  if(!sheetExpanded){body.innerHTML='';return;}
+  if(activeTab==='library')body.innerHTML=buildLibraryTab();
+  else if(activeTab==='props')body.innerHTML=buildPropsTab();
+  else if(activeTab==='scene')body.innerHTML=buildSceneTab();
+  else if(activeTab==='guide')body.innerHTML=buildGuideTab();
+}
+
+// ── LIBRARY TAB (with categories) ──
+let catCollapsed={};
+function buildLibraryTab(){
+  if(!objects.length)return`<div class="no-sel"><div class="icon">📦</div>ยังไม่มี object<br><button onclick="document.getElementById('fileIn').click()" style="margin-top:10px;padding:10px 18px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-family:'Sarabun',sans-serif;font-size:13px;font-weight:600;cursor:pointer">➕ เพิ่ม Object</button></div>`;
+
+  // group by category
+  const cats={};
+  objects.forEach(o=>{const c=o.category||'ทั่วไป';(cats[c]=cats[c]||[]).push(o);});
+
+  let html=`<div style="margin-bottom:8px"><button class="tbtn" style="width:100%;justify-content:center;display:flex;" onclick="document.getElementById('fileIn').click()">➕ เพิ่ม Object</button></div>`;
+
+  Object.keys(cats).forEach(cat=>{
+    const objs=cats[cat];
+    const open=catCollapsed[cat]!==true;
+    html+=`<div class="cat-header" onclick="toggleCat('${cat.replace(/'/g,"\\'")}')">
+      <div class="cat-label">🗂 ${cat} <span style="font-size:9px;color:var(--dim);font-weight:400">(${objs.length})</span></div>
+      <span class="cat-chev${open?' open':''}">▲</span>
+    </div>
+    <div class="cat-section" id="cat-${encodeURIComponent(cat)}" style="display:${open?'block':'none'}">
+    <div class="lib-grid">`;
+    objs.forEach(o=>{
+      html+=`<div class="lib-card" onclick="placeObject('${o.id}')">
+        <img src="${o.thumb}" alt="${o.name}">
+        <div class="lc-name">${o.name}</div>
+        <div class="lc-size" onclick="event.stopPropagation();editObjDim('${o.id}')">${o.realW>0?`📐 ${o.realW}×${o.realH}ซม.`:'+ ขนาดจริง'}</div>
+        <div class="lc-del" onclick="event.stopPropagation();removeFromLib('${o.id}')">✕</div>
+      </div>`;
+    });
+    html+=`<div class="upload-tile" onclick="document.getElementById('fileIn').click()"><span>➕</span><small>เพิ่ม</small></div>`;
+    html+=`</div></div>`;
+  });
+
+  html+=`<div style="margin-top:12px;font-size:11px;color:var(--dim);text-align:center;line-height:1.8">แตะ object เพื่อวางบน canvas · ดับเบิ้ลแตะ object บน canvas เพื่อแก้ไข</div>`;
+  return html;
+}
+function toggleCat(cat){
+  catCollapsed[cat]=!(catCollapsed[cat]===true);
+  buildSheetBody();
+}
+
+// ── PROPS TAB ──
+function buildPropsTab(){
+  const item=items.find(i=>i.id===selectedId);
+  if(!item)return`<div class="no-sel"><div class="icon">↖</div>เลือก object บน canvas<br>หรือดับเบิ้ลแตะเพื่อแก้ไข</div>`;
+  const obj=objects.find(o=>o.id===item.objId);
+  const L=item.locked;const dis=L?'disabled':'';const disStyle=L?'opacity:.45;pointer-events:none;':'';
+  return`
+    <div class="prop-box" style="${L?'border:1.5px solid var(--lock);background:#fbf4e6':''}">
+      <div class="prop-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>${L?'🔒':'🔓'} ${L?'Object ถูกล็อก':'ล็อก object'}</span>
+        <button class="abtn" style="padding:5px 10px;width:auto" onclick="toggleItemLock('${item.id}')">${L?'ปลดล็อก':'ล็อก'}</button>
+      </div>
+    </div>
+    <div class="prop-box" style="${disStyle}">
+      <div class="prop-title">📍 ตำแหน่ง (X / Y)</div>
+      <div class="xy-grid">
+        <div class="xy-field"><label>X (แนวนอน)</label>
+          <div class="xy-row">
+            <div class="xy-step" onclick="nudgeX(-1)">−</div>
+            <input type="number" value="${Math.round(item.x)}" onchange="setItemX(this.value)" id="inpX" ${dis}>
+            <div class="xy-step" onclick="nudgeX(1)">+</div>
+          </div></div>
+        <div class="xy-field"><label>Y (แนวตั้ง)</label>
+          <div class="xy-row">
+            <div class="xy-step" onclick="nudgeY(-1)">−</div>
+            <input type="number" value="${Math.round(item.y)}" onchange="setItemY(this.value)" id="inpY" ${dis}>
+            <div class="xy-step" onclick="nudgeY(1)">+</div>
+          </div></div>
+      </div>
+      <div class="prop-label">จัดตำแหน่ง</div>
+      <div class="action-row" style="grid-template-columns:1fr 1fr 1fr 1fr">
+        <button class="abtn" onclick="alignItem('cl')">⬌</button>
+        <button class="abtn" onclick="alignItem('ct')">⬍</button>
+        <button class="abtn" onclick="nudgeX(-10)">◀10</button>
+        <button class="abtn" onclick="nudgeX(10)">10▶</button>
+      </div>
+    </div>
+    <div class="prop-box" style="${disStyle}">
+      <div class="prop-title">📐 ขนาด (px)</div>
+      <div class="size-grid">
+        <div class="size-field"><label>กว้าง (W)</label><input type="number" value="${Math.round(item.w)}" onchange="setItemW(this.value)" ${dis}></div>
+        <div class="size-field"><label>สูง (H)</label><input type="number" value="${Math.round(item.h)}" onchange="setItemH(this.value)" ${dis}></div>
+      </div>
+      <div class="action-row">
+        <button class="abtn" onclick="resizeBy(.75)">↙ 75%</button>
+        <button class="abtn" onclick="resizeBy(1.25)">↗ 125%</button>
+        <button class="abtn" onclick="resizeBy(.5)">↙ 50%</button>
+        <button class="abtn" onclick="resizeBy(2)">↗ 200%</button>
+      </div>
+    </div>
+    <div class="prop-box">
+      <div class="prop-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>📏 ขนาดจริง</span>
+        <button class="abtn" style="padding:5px 10px;width:auto" onclick="editObjDim('${obj?obj.id:''}')">📐 ${obj&&obj.realW>0?'แก้ไข':'ระบุ'}</button>
+      </div>
+      <div style="font-size:11px;color:var(--dim);line-height:1.6">
+        ${obj&&obj.realW>0?`${obj.realW}×${obj.realH} ซม.`:'ยังไม่ระบุ'}
+      </div>
+    </div>
+    <div class="prop-box">
+      <div class="prop-title">🔧 จัดการ</div>
+      <div class="action-row">
+        <button class="abtn" onclick="flipSelected()">↔ พลิก</button>
+        <button class="abtn" onclick="bringToFront()">⤒ หน้าสุด</button>
+        <button class="abtn" onclick="bringForward()">⬆ ขึ้นหน้า</button>
+        <button class="abtn" onclick="sendBackward()">⬇ ลงหลัง</button>
+      </div>
+      <button class="abtn danger" style="width:100%;margin-top:8px" onclick="deleteSelected()">🗑 ลบ object นี้</button>
+    </div>`;
+}
+
+// ── SCENE TAB ──
+function buildSceneTab(){
+  return`
+    <div class="setting-group">
+      <div class="sg-label">มาตราส่วน</div>
+      <div class="sl-row">
+        <label>1 ม. =</label>
+        <input type="range" min="50" max="600" step="10" value="${Math.round(sceneScale*100)}"
+          oninput="sceneScale=this.value/100;document.getElementById('scaleVal').textContent=this.value+'px'">
+        <span class="val" id="scaleVal">${Math.round(sceneScale*100)}px</span>
+      </div>
+    </div>
+    <div class="setting-group">
+      <div class="sg-label">Zoom</div>
+      <div class="zoom-bar">
+        <button onclick="zoomBy(0.87)">−</button>
+        <input type="range" min="15" max="400" value="${Math.round(zoom*100)}"
+          oninput="setZoomAbs(this.value/100)" style="flex:1">
+        <button onclick="zoomBy(1.15)">+</button>
+        <span class="zoom-val">${Math.round(zoom*100)}%</span>
+      </div>
+      <button class="abtn" style="width:100%;margin-top:8px" onclick="resetView()">⊙ Reset View</button>
+    </div>
+    <div class="setting-group">
+      <div class="sg-label">จัดการ Canvas</div>
+      <div class="action-row">
+        <button class="abtn" onclick="exportPNG()">⬇ Export PNG</button>
+        <button class="abtn danger" onclick="clearAll()">🗑 ล้างทั้งหมด</button>
+      </div>
+    </div>`;
+}
+
+// ── GUIDE TAB ──
+function buildGuideTab(){
+  function goBtn(key,label,icon){
+    const on=guideOpts[key];
+    return`<div class="guide-opt${on?' on':''}" onclick="toggleGuideOpt('${key}')"><span>${icon}</span>${label}</div>`;
+  }
+  return`
+    <div style="margin-bottom:12px">
+      <div class="sg-label">แสดง Guides</div>
+      <div class="guide-opts">
+        ${goBtn('centerH','กึ่งกลางแนวนอน','─')}
+        ${goBtn('centerV','กึ่งกลางแนวตั้ง','│')}
+        ${goBtn('thirds','ตารางสามส่วน','⊞')}
+        ${goBtn('snapToGuide','Snap ไป Guide','⊕')}
+        ${goBtn('snapToItem','Snap ไป Object','⊞')}
+      </div>
+      <button class="abtn" style="width:100%;margin-top:8px" onclick="showGuides=!showGuides;renderGuides();buildSheetBody()">
+        ${showGuides?'👁 ซ่อน Guides':'👁 แสดง Guides'}
+      </button>
+    </div>
+    <div style="margin-bottom:12px">
+      <div class="sg-label">ระยะ Snap (px)</div>
+      <div class="sl-row">
+        <label>ระยะ</label>
+        <input type="range" min="4" max="40" value="${guideOpts.snapDist}"
+          oninput="guideOpts.snapDist=parseInt(this.value);document.getElementById('snapDistVal').textContent=this.value">
+        <span class="val" id="snapDistVal">${guideOpts.snapDist}</span>
+      </div>
+    </div>`;
+}
+function toggleGuideOpt(key){guideOpts[key]=!guideOpts[key];renderGuides();buildSheetBody();}
+function toggleGuides(){showGuides=!showGuides;renderGuides();document.getElementById('btnGuide').classList.toggle('active',showGuides);}
+
+// ═══════════════════════════════════════════════════════
+//  RESIZE / Z-ORDER / DELETE / EXPORT
+// ═══════════════════════════════════════════════════════
+function resizeBy(factor){
+  const item=items.find(i=>i.id===selectedId);if(!item||item.locked)return;
+  pushUndo();
+  item.w=Math.max(20,Math.round(item.w*factor));
+  const obj=objects.find(o=>o.id===item.objId);item.h=Math.round(item.w*objAspect(obj));
+  renderItems();buildSheetBody();autoSave();
+}
+function bringForward(){const idx=items.findIndex(i=>i.id===selectedId);if(idx<items.length-1){pushUndo();[items[idx].z,items[idx+1].z]=[items[idx+1].z,items[idx].z];items.sort((a,b)=>a.z-b.z);renderItems();autoSave();}}
+function sendBackward(){const idx=items.findIndex(i=>i.id===selectedId);if(idx>0){pushUndo();[items[idx].z,items[idx-1].z]=[items[idx-1].z,items[idx].z];items.sort((a,b)=>a.z-b.z);renderItems();autoSave();}}
+function bringToFront(){const item=items.find(i=>i.id===selectedId);if(item){pushUndo();item.z=nextZ++;renderItems();autoSave();}}
+function sendToBack(){const minZ=Math.min(...items.map(i=>i.z));const item=items.find(i=>i.id===selectedId);if(item){pushUndo();item.z=minZ-1;renderItems();autoSave();}}
+function deleteSelected(){
+  if(!selectedId)return;
+  const item=items.find(i=>i.id===selectedId);
+  if(item&&item.locked){setStatusMsg('🔒 Object นี้ถูกล็อกอยู่');return;}
+  pushUndo();
+  items=items.filter(i=>i.id!==selectedId);selectedId=null;renderItems();
+  document.getElementById('fabDel').style.display='none';buildSheetBody();autoSave();
+}
+function clearAll(){
+  if(items.length&&!confirm('ล้าง object ทั้งหมด?'))return;
+  pushUndo();items=[];selectedId=null;renderItems();
+  document.getElementById('fabDel').style.display='none';buildSheetBody();autoSave();
+}
+function removeFromLib(oid){
+  objects=objects.filter(o=>o.id!==oid);
+  items=items.filter(i=>i.objId!==oid);
+  pendingDimQueue=pendingDimQueue.filter(id=>id!==oid);
+  if(dimModalObjId===oid)closeDimModal();
+  if(!items.find(i=>i.id===selectedId)){selectedId=null;document.getElementById('fabDel').style.display='none';}
+  saveGlobalObjects();renderItems();buildSheetBody();autoSave();
+}
+function flipSelected(){
+  const item=items.find(i=>i.id===selectedId);if(item){pushUndo();item.flipX=!item.flipX;renderItems();autoSave();}
+}
+function toggleItemLock(id){
+  const item=items.find(i=>i.id===id);if(!item)return;
+  item.locked=!item.locked;renderItems();
+  if(activeTab==='props')buildSheetBody();
+  setStatusMsg(item.locked?'🔒 ล็อก object แล้ว':'🔓 ปลดล็อกแล้ว');
+  autoSave();
+}
+
+function exportPNG(){
+  const sorted=[...items].sort((a,b)=>a.z-b.z);
+  if(!sorted.length){alert('ไม่มี object บน canvas');return;}
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  sorted.forEach(i=>{minX=Math.min(minX,i.x);minY=Math.min(minY,i.y);maxX=Math.max(maxX,i.x+i.w);maxY=Math.max(maxY,i.y+i.h);});
+  const pad=30,W=maxX-minX+pad*2,H=maxY-minY+pad*2;
+  const ec=document.createElement('canvas');ec.width=W;ec.height=H;
+  const ectx=ec.getContext('2d');
+  let loaded=0;
+  sorted.forEach(item=>{
+    const obj=objects.find(o=>o.id===item.objId);if(!obj){loaded++;check();return;}
+    const img=new Image();
+    img.onload=()=>{
+      ectx.save();
+      if(item.flipX){ectx.translate((item.x-minX+pad)+item.w,0);ectx.scale(-1,1);ectx.drawImage(img,0,item.y-minY+pad,item.w,item.h);}
+      else ectx.drawImage(img,item.x-minX+pad,item.y-minY+pad,item.w,item.h);
+      ectx.restore();loaded++;check();
+    };
+    img.src=obj.src;
+  });
+  function check(){if(loaded<sorted.length)return;const a=document.createElement('a');a.download='backdrop-layout.png';a.href=ec.toDataURL('image/png');a.click();}
+}
+
+// ═══════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+//  INIT (async — ต้องรอ Firestore)
+// ═══════════════════════════════════════════════════════
+async function initApp(){
+  // แสดง loading
+  setStatusMsg('⏳ กำลังโหลดข้อมูล...');
+
+  await loadGlobalObjects();
+  await loadProjects();
+  await loadCurrentProject();
+
+  // try loading from URL first (shared link)
+  const loadedFromUrl=tryLoadFromUrl();
+
+  if(!loadedFromUrl){
+    if(currentProjectId&&projects[currentProjectId]){
+      switchProject(currentProjectId);
+    }else{
+      if(Object.keys(projects).length===0){
+        const id='proj_'+Date.now();
+        projects[id]={name:'โปรเจ็คของฉัน',items:[],zoom:1,panX:0,panY:0,createdAt:Date.now(),updatedAt:Date.now()};
+        saveProjects();
+        currentProjectId=id;
+        saveCurrentProjectId();
+        updateProjectLabel();
+      }else{
+        const latest=Object.keys(projects).sort((a,b)=>projects[b].updatedAt-projects[a].updatedAt)[0];
+        switchProject(latest);
+      }
+    }
+  }
+
+  applyViewTransform();renderGuides();
+  updateUndoBtn();
+
+  sheet.style.height=SHEET_COLLAPSED_H+'px';
+  setTimeout(()=>{ switchTab('library'); },300);
+
+  // เปิด realtime sync
+  startRealtimeSync();
+
+  // Periodic auto-save every 30s
+  setInterval(()=>{autoSave();},30000);
+
+  setStatusMsg('✅ โหลดข้อมูลสำเร็จ');
+}
+
+initApp();
+</script>
+</body>
+</html>
